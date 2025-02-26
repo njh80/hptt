@@ -373,23 +373,30 @@ static INLINE void macro_kernel_scalar(const floatType* __restrict__ A, const si
                                              const floatType alpha ,const floatType beta)
 {
 #ifdef DEBUG
-   assert( blockingA > 0 && blockingB > 0);
+   printf("Macro kernel: blockingA = %d with %zu, blockingB = %d with %zu\n", blockingA, lda, blockingB, ldb);
+   assert( blockingA >= 0 && blockingB >= 0);
 #endif
 
    if( betaIsZero )
       for(int j=0; j < blockingA; ++j)
-         for(int i=0; i < blockingB; ++i)
+         for(int i=0; i < blockingB; ++i){
+#ifdef DEBUG
+            printf("    A[+%zu] = %e -> B[+%zu] = %e\n", i * lda + j, A[i * lda + j], i + j * ldb, B[i + j * ldb]);
+#endif
             if( conjA )
                B[i + j * ldb] = alpha * conj(A[i * lda + j]);
             else
-               B[i + j * ldb] = alpha * A[i * lda + j];
+               B[i + j * ldb] = alpha * A[i * lda + j];}
    else
       for(int j=0; j < blockingA; ++j)
-         for(int i=0; i < blockingB; ++i)
+         for(int i=0; i < blockingB; ++i){
+#ifdef DEBUG
+            printf("    A[+%zu] = %e -> B[+%zu] = %e\n", i * lda + j, A[i * lda + j], i + (j * ldb), B[i + (j * ldb)]);
+#endif
             if( conjA )
                B[i + j * ldb] = alpha * conj(A[i * lda + j]) + beta * B[i + j * ldb];
             else
-               B[i + j * ldb] = alpha * A[i * lda + j] + beta * B[i + j * ldb];
+               B[i + j * ldb] = alpha * A[i * lda + j] + beta * B[i + j * ldb];}
 }
 
 template<int blockingA, int blockingB, int betaIsZero, typename floatType, bool useStreamingStores_, bool conjA>
@@ -575,27 +582,43 @@ void transpose_int_scalar( const floatType* __restrict__ A, int sizeStride1A,
    const int32_t end = plan->end;
    const size_t lda = plan->lda;
    const size_t ldb = plan->ldb;
+   const int offDiffAB = plan->offDiffAB;
    if( plan->next->next != nullptr ){
       // recurse
       int i = plan->start;
-      if( lda == 1)
-         transpose_int_scalar<betaIsZero, floatType, conjA>( &A[i*lda], end - plan->start, &B[i*ldb], sizeStride1B, alpha, beta, plan->next);
-      else if( ldb == 1)
-         transpose_int_scalar<betaIsZero, floatType, conjA>( &A[i*lda], sizeStride1A, &B[i*ldb], end - plan->start, alpha, beta, plan->next);
+#ifdef DEBUG
+      printf("----[SCALAR]Pointing to deeper level, Shifting A[+%zu], B[+%zu], repeats (%zu, %zu) = %zu\n", (i+offDiffAB)*lda, i*ldb, lda, ldb, end - plan->start);
+#endif
+      if( lda == 1 && plan->indexA )
+         transpose_int_scalar<betaIsZero, floatType, conjA>( &A[(i+offDiffAB)*lda], end - plan->start, &B[i*ldb], sizeStride1B, alpha, beta, plan->next);
+      else if( ldb == 1 && plan->indexB )
+         transpose_int_scalar<betaIsZero, floatType, conjA>( &A[(i+offDiffAB)*lda], sizeStride1A, &B[i*ldb], end - plan->start, alpha, beta, plan->next);
       else
-         for(; i < end; i++)
-            transpose_int_scalar<betaIsZero, floatType, conjA>( &A[i*lda], sizeStride1A, &B[i*ldb], sizeStride1B, alpha, beta, plan->next);
+         for(; i < end; i++){
+#ifdef DEBUG
+            printf("--------[SCALAR]Repeat %zu of %zu, A[+%zu], B[+%zu], repeats (%zu, %zu) = %zu\n", i - plan->start, end - plan->start, (i+offDiffAB)*lda, i*ldb, lda, ldb, end - plan->start);
+#endif
+            transpose_int_scalar<betaIsZero, floatType, conjA>( &A[(i+offDiffAB)*lda], sizeStride1A, &B[i*ldb], sizeStride1B, alpha, beta, plan->next);}
    }else{
       // macro-kernel
       const size_t lda_macro = plan->next->lda;
       const size_t ldb_macro = plan->next->ldb;
       int i = plan->start;
       const size_t scalarRemainder = plan->end - plan->start;
+#ifdef DEBUG
+      printf("----[SCALAR]Sending to macro-kernel, Shifting A[+%zu] lda - %zu, B[+%zu] ldb - %zu\n", (i+offDiffAB)*lda, lda, i*ldb, ldb);
+#endif
       if( scalarRemainder > 0 ){
-         if( lda == 1)
-            macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[i*lda], lda_macro, scalarRemainder, &B[i*ldb], ldb_macro, sizeStride1B, alpha, beta);
-         else if( ldb == 1)
-            macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[i*lda], lda_macro, sizeStride1A, &B[i*ldb], ldb_macro, scalarRemainder, alpha, beta);
+         if( lda == 1 && plan->indexA )
+            macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[(i+offDiffAB)*lda], lda_macro, scalarRemainder, &B[i*ldb], ldb_macro, sizeStride1B, alpha, beta);
+         else if( ldb == 1 && plan->indexB )
+            macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[(i+offDiffAB)*lda], lda_macro, sizeStride1A, &B[i*ldb], ldb_macro, scalarRemainder, alpha, beta);
+         else
+            for(; i < end; i++){
+#ifdef DEBUG
+               printf("--------[SCALAR]Repeat %zu of %zu, A[+%zu], B[+%zu], repeats (%zu, %zu) = %zu\n", i - plan->start, end - plan->start, (i+offDiffAB)*lda, i*ldb, lda, ldb, end - plan->start);
+#endif
+               macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[(i+offDiffAB)*lda], lda_macro, sizeStride1A, &B[i*ldb], ldb_macro, sizeStride1B, alpha, beta);}
       }
    }
 }
@@ -608,74 +631,123 @@ void transpose_int( const floatType* __restrict__ A, const floatType* __restrict
    const int32_t inc = plan->inc;
    const size_t lda = plan->lda;
    const size_t ldb = plan->ldb;
+   const int offDiffAB = plan->offDiffAB;
 
    constexpr int blocking_micro_ = REGISTER_BITS/8 / sizeof(floatType);
    constexpr int blocking_ = blocking_micro_ * 4;
 
    if( plan->next->next != nullptr ){
+#ifdef DEBUG
+      printf("Pointing to deeper level.\n");
+#endif
       // recurse
       int32_t i;
       for(i = plan->start; i < end; i+= inc)
       {
-         if( i + inc < end )
-            transpose_int<blockingA, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], &A[(i+1)*lda], &B[i*ldb], &B[(i+1)*ldb], alpha, beta, plan->next);
-         else
-            transpose_int<blockingA, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
+#ifdef DEBUG
+         printf("|___Shifting A[+%zu], B[+%zu]; repeat %zu of %zu\n", (i+offDiffAB)*lda, i*ldb, i - plan->start, end - plan->start);
+#endif
+         if( i + inc < end ) {
+            transpose_int<blockingA, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[(i+offDiffAB)*lda], &A[(i+1+offDiffAB)*lda], &B[i*ldb], &B[(i+1)*ldb], alpha, beta, plan->next);
+         } else if( i == plan->start || i + inc >= end ) {
+            transpose_int<blockingA, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[(i+offDiffAB)*lda], &A[(i+offDiffAB)*lda], &B[i*ldb], &B[i*ldb], alpha, beta, plan->next);
+         } else {
+            transpose_int<blockingA, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[(i+offDiffAB)*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
+         }
       }
       // remainder
       if( blocking_/2 >= blocking_micro_ && (i + blocking_/2) <= plan->end ){
-         if( lda == 1)
-            transpose_int<blocking_/2, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
-         else if( ldb == 1)
-            transpose_int<blockingA, blocking_/2, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
+#ifdef DEBUG
+         printf("---- Half Blocking_ where leading dimension is 1 - A -> %zu, B -> %zu\n", lda, ldb);
+         printf("|___Shifting A[+%zu], B[+%zu]\n", (i+offDiffAB)*lda, i*ldb);
+#endif
+         if( lda == 1 && plan->indexA )
+            transpose_int<blocking_/2, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[(i+offDiffAB)*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
+         else if( ldb == 1 && plan->indexB )
+            transpose_int<blockingA, blocking_/2, betaIsZero, floatType, useStreamingStores, conjA>( &A[(i+offDiffAB)*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
          i+=blocking_/2;
       }
       if( blocking_/4 >= blocking_micro_ && (i + blocking_/4) <= plan->end ){
-         if( lda == 1)
-            transpose_int<blocking_/4, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
-         else if( ldb == 1)
-            transpose_int<blockingA, blocking_/4, betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
+#ifdef DEBUG
+         printf("---- Quarter Blocking_ where leading dimension is 1 - A -> %zu, B -> %zu\n", lda, ldb);
+         printf("|___Shifting A[+%zu], B[+%zu]\n", (i+offDiffAB)*lda, i*ldb);
+#endif
+         if( lda == 1 && plan->indexA )
+            transpose_int<blocking_/4, blockingB, betaIsZero, floatType, useStreamingStores, conjA>( &A[(i+offDiffAB)*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
+         else if( ldb == 1 && plan->indexB )
+            transpose_int<blockingA, blocking_/4, betaIsZero, floatType, useStreamingStores, conjA>( &A[(i+offDiffAB)*lda], Anext, &B[i*ldb], Bnext, alpha, beta, plan->next);
          i+=blocking_/4;
       }
       const size_t scalarRemainder = plan->end - i;
       if( scalarRemainder > 0 ){
-         if( lda == 1)
-            transpose_int_scalar<betaIsZero, floatType, conjA>( &A[i*lda], scalarRemainder, &B[i*ldb], -1, alpha, beta, plan->next);
+#ifdef DEBUG
+         printf("|___Shifting A[+%zu], B[+%zu]\n", (i+offDiffAB)*lda, i*ldb);
+         printf("---- Passing to scalar. Blocking_ to %zu (blA = %d, blB = %d) where leading dimension is 1 - A -> %zu, B -> %zu\n", plan->end - i, blockingA, blockingB, lda, ldb);
+#endif
+         if( lda == 1 && plan->indexA )
+            transpose_int_scalar<betaIsZero, floatType, conjA>( &A[(i+offDiffAB)*lda], scalarRemainder, &B[i*ldb], blockingB, alpha, beta, plan->next);
+         else if ( ldb == 1 && plan->indexB )
+            transpose_int_scalar<betaIsZero, floatType, conjA>( &A[(i+offDiffAB)*lda], blockingA, &B[i*ldb], scalarRemainder, alpha, beta, plan->next);
          else
-            transpose_int_scalar<betaIsZero, floatType, conjA>( &A[i*lda], -1, &B[i*ldb], scalarRemainder, alpha, beta, plan->next);
+            transpose_int_scalar<betaIsZero, floatType, conjA>( &A[(i+offDiffAB)*lda], blockingA, &B[i*ldb], blockingB, alpha, beta, plan->next);
       }
    } else {
       const size_t lda_macro = plan->next->lda;
       const size_t ldb_macro = plan->next->ldb;
       // invoke macro-kernel
-      
+#ifdef DEBUG
+      printf("Sending to macro-kernel.\n");
+#endif
       int32_t i;
       for(i = plan->start; i < end; i+= inc)
-         if( i + inc < end )
-            macro_kernel<blockingA, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], &A[(i+1)*lda], lda_macro, &B[i*ldb], &B[(i+1)*ldb], ldb_macro, alpha, beta);
-         else
-            macro_kernel<blockingA, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
+      {
+#ifdef DEBUG
+         printf("|___Shifting A[+%zu], B[+%zu]; repeat %zu of %zu\n", (i+offDiffAB)*lda, i*ldb, i - plan->start, end - plan->start);
+         printf("--------- Case A: %zu < %zu, Case B: %zu == %zu or %zu > %zu, else Case C\n", i + inc, end, i, plan->start, i + inc, end);
+#endif
+         if( i + inc < end ) {
+            macro_kernel<blockingA, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[(i+offDiffAB)*lda], &A[(i+offDiffAB+1)*lda], lda_macro, &B[i*ldb], &B[(i+1)*ldb], ldb_macro, alpha, beta);
+         } else if( i == plan->start || i + inc > end ) {
+            break; //TODO: in this case blocking may be incorrect - hopefully nothing lands here anyway.
+         } else {
+            macro_kernel<blockingA, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[(i+offDiffAB)*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
+         }
+      }
       // remainder
       if( blocking_/2 >= blocking_micro_ && (i + blocking_/2) <= plan->end ){
-         if( lda == 1)
-            macro_kernel<blocking_/2, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
-         else if( ldb == 1)
-            macro_kernel<blockingA, blocking_/2, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
+#ifdef DEBUG
+         printf("---- Half Blocking_ where leading dimension is 1 - A -> %zu, B -> %zu\n", lda, ldb);
+         printf("|___Shifting A[+%zu], B[+%zu]\n", (i+offDiffAB)*lda, i*ldb);
+#endif
+         if( lda == 1 && plan->indexA )
+            macro_kernel<blocking_/2, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[(i+offDiffAB)*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
+         else if( ldb == 1 && plan->indexB )
+            macro_kernel<blockingA, blocking_/2, betaIsZero,floatType, useStreamingStores, conjA>(&A[(i+offDiffAB)*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
          i+=blocking_/2;
       }
       if( blocking_/4 >= blocking_micro_ && (i + blocking_/4) <= plan->end ){
-         if( lda == 1)
-            macro_kernel<blocking_/4, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
-         else if( ldb == 1)
-            macro_kernel<blockingA, blocking_/4, betaIsZero,floatType, useStreamingStores, conjA>(&A[i*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
+#ifdef DEBUG
+         printf("---- Quarter Blocking_ where leading dimension is 1 - A -> %zu, B -> %zu\n", lda, ldb);
+         printf("|___Shifting A[+%zu], B[+%zu]\n", (i+offDiffAB)*lda, i*ldb);
+#endif
+         if( lda == 1 && plan->indexA )
+            macro_kernel<blocking_/4, blockingB, betaIsZero,floatType, useStreamingStores, conjA>(&A[(i+offDiffAB)*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
+         else if( ldb == 1 && plan->indexB )
+            macro_kernel<blockingA, blocking_/4, betaIsZero,floatType, useStreamingStores, conjA>(&A[(i+offDiffAB)*lda], Anext, lda_macro, &B[i*ldb], Bnext, ldb_macro, alpha, beta);
          i+=blocking_/4;
       }
       const size_t scalarRemainder = plan->end - i;
       if( scalarRemainder > 0 ){
-         if( lda == 1)
-            macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[i*lda], lda_macro, scalarRemainder, &B[i*ldb], ldb_macro, blockingB, alpha, beta);
-         else if( ldb == 1)
-            macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[i*lda], lda_macro, blockingA, &B[i*ldb], ldb_macro, scalarRemainder, alpha, beta);
+#ifdef DEBUG
+         printf("|___Shifting A[+%zu], B[+%zu]\n", (i+offDiffAB)*lda, i*ldb);
+         printf("---- Passing to scalar. Blocking_ to %zu where leading dimension is 1 - A -> %zu, B -> %zu\n", plan->end - i, lda, ldb);
+#endif
+         if( lda == 1 && plan->indexA )
+            macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[(i+offDiffAB)*lda], lda_macro, scalarRemainder, &B[i*ldb], ldb_macro, blockingB, alpha, beta);
+         else if( ldb == 1 && plan->indexB )
+            macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[(i+offDiffAB)*lda], lda_macro, blockingA, &B[i*ldb], ldb_macro, scalarRemainder, alpha, beta);
+         else
+            macro_kernel_scalar<betaIsZero,floatType, conjA>(&A[(i+offDiffAB)*lda], lda_macro, blockingA, &B[i*ldb], ldb_macro, blockingB, alpha, beta);
       }
    }
 }
@@ -688,36 +760,48 @@ void transpose_int_constStride1( const floatType* __restrict__ A, floatType* __r
    constexpr int32_t inc = 1; // TODO
    const size_t lda = plan->lda;
    const size_t ldb = plan->ldb;
+   const int offDiffAB = plan->offDiffAB;
 
    if( plan->next != nullptr )
-      for(int i = plan->start; i < end; i+= inc)
+      for(int i = plan->start; i < end; i+= inc) {
          // recurse
-         transpose_int_constStride1<betaIsZero, floatType, useStreamingStores, conjA>( &A[i*lda], &B[i*ldb], alpha, beta, plan->next);
-   else 
+#ifdef DEBUG
+         printf("[CONST](Loop %zu of %zu)Shifting A[+%zu], B[+%zu]\n", i - plan->start, end - plan->start, (i+offDiffAB)*lda, i*ldb);
+#endif
+         transpose_int_constStride1<betaIsZero, floatType, useStreamingStores, conjA>( &A[(i+offDiffAB)*lda], &B[i*ldb], alpha, beta, plan->next);
+      }
+   else
       if( !betaIsZero )
       {
-         for(int32_t i = plan->start; i < end; i+= inc)
+#ifdef DEBUG
+         printf("[CONST]Setting A[+%zu], B[+%zu] (from %zu to %d)\n", (plan->start+offDiffAB), plan->start, plan->start, end);
+#endif
+         for(int32_t i = plan->start; i < end; i+= inc){
             if( conjA )
-               B[i] = alpha * conj(A[i]) + beta * B[i];
+               B[i*ldb] = alpha * conj(A[(i+offDiffAB)*lda]) + beta * B[i*ldb];
             else
-               B[i] = alpha * A[i] + beta * B[i];
+               B[i*ldb] = alpha * A[(i+offDiffAB)*lda] + beta * B[i*ldb];
+         }
       } else {
+#ifdef DEBUG
+         printf("[CONST]Setting A[+%zu], B[+%zu] (from %zu to %d)\n", (plan->start+offDiffAB), plan->start, plan->start, end);
+#endif
          if( useStreamingStores)
             if( conjA )
 #pragma vector nontemporal
                for(int32_t i = plan->start; i < end; i+= inc)
-                  B[i] = alpha * conj(A[i]);
+                  B[i*ldb] = alpha * conj(A[(i+offDiffAB)*lda]);
             else
 #pragma vector nontemporal
                for(int32_t i = plan->start; i < end; i+= inc)
-                  B[i] = alpha * A[i];
+                  B[i*ldb] = alpha * A[(i+offDiffAB)*lda];
          else
             if( conjA )
                for(int32_t i = plan->start; i < end; i+= inc)
-                  B[i] = alpha * conj(A[i]);
+                  B[i*ldb] = alpha * conj(A[(i+offDiffAB)*lda]);
             else
                for(int32_t i = plan->start; i < end; i+= inc)
-                  B[i] = alpha * A[i];
+                  B[i*ldb] = alpha * A[(i+offDiffAB)*lda];
       }
 }
 
@@ -727,6 +811,8 @@ void transpose_int_constStride1( const floatType* __restrict__ A, floatType* __r
                  const int *perm, 
                  const int *outerSizeA, 
                  const int *outerSizeB, 
+                 const int *offsetA, 
+                 const int *offsetB, 
                  const int dim,
                  const floatType *A,
                  const floatType alpha,
@@ -756,13 +842,17 @@ void transpose_int_constStride1( const floatType* __restrict__ A, floatType* __r
          int tmpSizeA[dim];
          int tmpOuterSizeA[dim];
          int tmpOuterSizeB[dim];
-         accountForRowMajor(sizeA, outerSizeA, outerSizeB, perm, 
-               tmpSizeA, tmpOuterSizeA, tmpOuterSizeB, tmpPerm, dim, useRowMajor); 
+         int tmpOffsetA[dim];
+         int tmpOffsetB[dim];
+         accountForRowMajor(sizeA, outerSizeA, outerSizeB, offsetA, offsetB, perm, 
+               tmpSizeA, tmpOuterSizeA, tmpOuterSizeB, tmpOffsetA, tmpOffsetB, tmpPerm, dim, useRowMajor); 
 
          sizeA_.resize(dim);
          perm_.resize(dim);
          outerSizeA_.resize(dim);
          outerSizeB_.resize(dim);
+         offsetA_.resize(dim);
+         offsetB_.resize(dim);
          lda_.resize(dim);
          ldb_.resize(dim);
          if(threadIds){
@@ -775,10 +865,10 @@ void transpose_int_constStride1( const floatType* __restrict__ A, floatType* __r
                threadIds_.push_back(i);
          }
 
-         verifyParameter(tmpSizeA, tmpPerm, tmpOuterSizeA, tmpOuterSizeB, dim);
+         verifyParameter(tmpSizeA, tmpPerm, tmpOuterSizeA, tmpOuterSizeB, tmpOffsetA, tmpOffsetB, dim);
 
          // initializes dim_, outerSizeA, outerSizeB, sizeA and perm 
-         skipIndices(tmpSizeA, tmpPerm, tmpOuterSizeA, tmpOuterSizeB, dim);
+         skipIndices(tmpSizeA, tmpPerm, tmpOuterSizeA, tmpOuterSizeB, tmpOffsetA, tmpOffsetB, dim);
          fuseIndices();
 
          // initializes lda_ and ldb_
@@ -803,6 +893,8 @@ void transpose_int_constStride1( const floatType* __restrict__ A, floatType* __r
                                           perm_(other.perm_),
                                           outerSizeA_(other.outerSizeA_),
                                           outerSizeB_(other.outerSizeB_),
+                                          offsetA_(other.offsetA_),
+                                          offsetB_(other.offsetB_),
                                           lda_(other.lda_),
                                           ldb_(other.ldb_),
                                           threadIds_(other.threadIds_),
@@ -867,16 +959,16 @@ void Transpose<floatType>::executeEstimate(const Plan *plan) noexcept
 
 
 template<int betaIsZero, typename floatType, bool useStreamingStores, bool spawnThreads, bool conjA>
-static void axpy_1D( const floatType* __restrict__ A, floatType* __restrict__ B, const int myStart, const int myEnd, const floatType alpha, const floatType beta, int numThreads)
+static void axpy_1D( const floatType* __restrict__ A, floatType* __restrict__ B, const int myStart, const int myEnd, const int &offDiffAB_, const floatType alpha, const floatType beta, int numThreads)
 {
    if( !betaIsZero )
    {
       HPTT_DUPLICATE(spawnThreads,
          for(int32_t i = myStart; i < myEnd; i++)
             if( conjA )
-               B[i] = alpha * conj(A[i]) + beta * B[i];
+               B[i] = alpha * conj(A[i + offDiffAB_]) + beta * B[i];
             else
-               B[i] = alpha * A[i] + beta * B[i];
+               B[i] = alpha * A[i + offDiffAB_] + beta * B[i];
       )
    } else {
       if( useStreamingStores)
@@ -884,17 +976,17 @@ static void axpy_1D( const floatType* __restrict__ A, floatType* __restrict__ B,
          HPTT_DUPLICATE(spawnThreads,
             for(int32_t i = myStart; i < myEnd; i++)
                if( conjA )
-                  B[i] = alpha * conj(A[i]);
+                  B[i] = alpha * conj(A[i + offDiffAB_]);
                else
-                  B[i] = alpha * A[i];
+                  B[i] = alpha * A[i + offDiffAB_];
          )
       else
          HPTT_DUPLICATE(spawnThreads,
             for(int32_t i = myStart; i < myEnd; i++)
                if( conjA )
-                  B[i] = alpha * conj(A[i]);
+                  B[i] = alpha * conj(A[i + offDiffAB_]);
                else
-                  B[i] = alpha * A[i];
+                  B[i] = alpha * A[i + offDiffAB_];
          )
    }
 }
@@ -902,37 +994,37 @@ static void axpy_1D( const floatType* __restrict__ A, floatType* __restrict__ B,
 template<int betaIsZero, typename floatType, bool useStreamingStores, bool spawnThreads, bool conjA>
 static void axpy_2D( const floatType* __restrict__ A, const int lda, 
                         floatType* __restrict__ B, const int ldb, 
-                        const int n0, const int myStart, const int myEnd, const floatType alpha, const floatType beta, int numThreads)
+                        const int n0, const int myStart, const int myEnd, const int (&offDiffAB_)[2], const int offsetB_, const floatType alpha, const floatType beta, int numThreads)
 {
    if( !betaIsZero )
    {
       HPTT_DUPLICATE(spawnThreads,
          for(int32_t j = myStart; j < myEnd; j++)
-            for(int32_t i = 0; i < n0; i++)
+            for(int32_t i = offsetB_; i < n0 + offsetB_; i++)
                if( conjA )
-                  B[i + j * ldb] = alpha * conj(A[i + j * lda]) + beta * B[i + j * ldb];
+                  B[i + j * ldb] = alpha * conj(A[(i + offDiffAB_[0]) + (j + offDiffAB_[1]) * lda]) + beta * B[i + j * ldb];
                else
-                  B[i + j * ldb] = alpha * A[i + j * lda] + beta * B[i + j * ldb];
+                  B[i + j * ldb] = alpha * A[(i + offDiffAB_[0]) + (j + offDiffAB_[1]) * lda] + beta * B[i + j * ldb];
       )
    } else {
       if( useStreamingStores)
          HPTT_DUPLICATE(spawnThreads,
             for(int32_t j = myStart; j < myEnd; j++)
 _Pragma("vector nontemporal")
-            for(int32_t i = 0; i < n0; i++)
+            for(int32_t i = offsetB_; i < n0 + offsetB_; i++)
                if( conjA )
-                  B[i + j * ldb] = alpha * conj(A[i + j * lda]);
+                  B[i + j * ldb] = alpha * conj(A[(i + offDiffAB_[0]) + (j + offDiffAB_[1]) * lda]);
                else
-                  B[i + j * ldb] = alpha * A[i + j * lda];
+                  B[i + j * ldb] = alpha * A[(i + offDiffAB_[0]) + (j + offDiffAB_[1]) * lda];
          )
       else
          HPTT_DUPLICATE(spawnThreads,
             for(int32_t j = myStart; j < myEnd; j++)
-               for(int32_t i = 0; i < n0; i++)
+               for(int32_t i = offsetB_; i < n0 + offsetB_; i++)
                   if( conjA )
-                     B[i + j * ldb] = alpha * conj(A[i + j * lda]);
+                     B[i + j * ldb] = alpha * conj(A[(i + offDiffAB_[0]) + (j + offDiffAB_[1]) * lda]);
                   else
-                     B[i + j * ldb] = alpha * A[i + j * lda];
+                     B[i + j * ldb] = alpha * A[(i + offDiffAB_[0]) + (j + offDiffAB_[1]) * lda];
          )
    }
 }
@@ -987,22 +1079,27 @@ void Transpose<floatType>::execute_expert() noexcept
    int myStart = 0;
    int myEnd = 0;
 
+#ifdef DEBUG
+   printf("Executing expert with dim = %d\n", dim_);
+#endif
    if( dim_ == 1)
    {
       getStartEnd<spawnThreads>(sizeA_[0], myStart, myEnd);
+      const int offDiffAB_ = (int)offsetA_[0] - (int)offsetB_[0];
       if( conjA_ )
-         axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>( A_, B_, myStart, myEnd, alpha_, beta_, numThreads_ );
+         axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>( A_, B_, myStart + offsetB_[0], myEnd + offsetB_[0], offDiffAB_, alpha_, beta_, numThreads_ );
       else
-         axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>( A_, B_, myStart, myEnd, alpha_, beta_, numThreads_ );
+         axpy_1D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>( A_, B_, myStart + offsetB_[0], myEnd + offsetB_[0], offDiffAB_, alpha_, beta_, numThreads_ );
       return;
    }
    else if( dim_ == 2 && perm_[0] == 0)
    {
       getStartEnd<spawnThreads>(sizeA_[1], myStart, myEnd);
+      const int offDiffAB_[2] = {((int)offsetA_[0] - (int)offsetB_[0]), ((int)offsetA_[1] - (int)offsetB_[1])};
       if( conjA_ )
-         axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>( A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, numThreads_ );
+         axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, true>( A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart + offsetB_[1], myEnd + offsetB_[1], offDiffAB_, offsetB_[0], alpha_, beta_, numThreads_ );
       else
-         axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>( A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart, myEnd, alpha_, beta_, numThreads_ );
+         axpy_2D<betaIsZero, floatType, useStreamingStores, spawnThreads, false>( A_, lda_[1], B_, ldb_[1], sizeA_[0], myStart + offsetB_[1], myEnd + offsetB_[1], offDiffAB_, offsetB_[0], alpha_, beta_, numThreads_ );
       return;
    }
 
@@ -1420,7 +1517,7 @@ void Transpose<floatType>::getParallelismStrategies(std::vector<std::vector<int>
 }
 
 template<typename floatType>
-void Transpose<floatType>::verifyParameter(const int *size, const int* perm, const int* outerSizeA, const int* outerSizeB, const int dim) const
+void Transpose<floatType>::verifyParameter(const int *size, const int* perm, const int* outerSizeA, const int* outerSizeB, const int* offsetA, const int* offsetB, const int dim) const
 {
    if ( dim < 1 ) {
       fprintf(stderr,"[HPTT] ERROR: dimensionality too low.\n");
@@ -1457,6 +1554,20 @@ void Transpose<floatType>::verifyParameter(const int *size, const int* perm, con
             fprintf(stderr,"[HPTT] ERROR: outerSizeB invalid\n");
             exit(-1);
          }
+      
+   if ( offsetA != NULL )
+      for(int i=0;i < dim ; ++i)
+         if ( offsetA[i] + size[i] > outerSizeA[i] ) {
+            fprintf(stderr,"[HPTT] ERROR: offsetA invalid\n");
+            exit(-1);
+         }
+
+   if ( offsetB != NULL )
+      for(int i=0;i < dim ; ++i)
+         if ( offsetB[i] + size[perm[i]] > outerSizeB[i] ) {
+            fprintf(stderr,"[HPTT] ERROR: offsetB invalid\n");
+            exit(-1);
+         }
 }
 
 template<typename floatType>
@@ -1480,7 +1591,7 @@ void Transpose<floatType>::computeLeadingDimensions()
 }
 
 template<typename floatType>
-void Transpose<floatType>::skipIndices(const int *sizeA, const int* perm, const int *outerSizeA, const int *outerSizeB, const int dim)
+void Transpose<floatType>::skipIndices(const int *sizeA, const int* perm, const int *outerSizeA, const int *outerSizeB, const int *offsetA, const int *offsetB, const int dim)
 {
    for(int i=0;i < dim ; ++i)
    {
@@ -1494,6 +1605,14 @@ void Transpose<floatType>::skipIndices(const int *sizeA, const int* perm, const 
          outerSizeB_[i] = outerSizeB[i];
       else
          outerSizeB_[i] = sizeA[perm[i]];
+      if(offsetA)
+         offsetA_[i] = offsetA[i];
+      else
+         offsetA_[i] = 0;
+      if(offsetB)
+         offsetB_[i] = offsetB[i];
+      else
+         offsetB_[i] = 0;
    }
 
    int skipped = 0;
@@ -1508,6 +1627,8 @@ void Transpose<floatType>::skipIndices(const int *sizeA, const int* perm, const 
          sizeA_[i] = -1;
          outerSizeA_[i] = -1;
          outerSizeB_[idxB] = -1;
+         offsetA_[i] = -1;
+         offsetB_[idxB] = -1;
          perm_[idxB] = -1;
          skipped++;
       }
@@ -1530,8 +1651,10 @@ void Transpose<floatType>::skipIndices(const int *sizeA, const int* perm, const 
          for(;j < dim ; ++j)
             if( outerSizeA_[j] != -1 )
                break;
-         if( j < dim )
+         if( j < dim ) {
             std::swap(outerSizeA_[i], outerSizeA_[j]);
+            std::swap(offsetA_[i], offsetA_[j]);
+         }
       }
    for(int i=0;i < dim ; ++i)
       if( outerSizeB_[i] == -1 )
@@ -1540,8 +1663,10 @@ void Transpose<floatType>::skipIndices(const int *sizeA, const int* perm, const 
          for(;j < dim ; ++j)
             if( outerSizeB_[j] != -1 )
                break;
-         if( j < dim )
+         if( j < dim ) {
             std::swap(outerSizeB_[i], outerSizeB_[j]);
+            std::swap(offsetB_[i], offsetB_[j]);
+         }
       }
    for(int i=0;i < dim ; ++i)
       if( perm_[i] == -1 )
@@ -1565,11 +1690,15 @@ void Transpose<floatType>::skipIndices(const int *sizeA, const int* perm, const 
       sizeA_[0] = 1;
       outerSizeA_[0] = 1;
       outerSizeB_[0] = 1;
+      offsetA_[0] = 0;
+      offsetB_[0] = 0;
    } else {
       perm_.resize(dim_);
       sizeA_.resize(dim_);
       outerSizeA_.resize(dim_);
       outerSizeB_.resize(dim_);
+      offsetA_.resize(dim_);
+      offsetB_.resize(dim_);
 
       // remove gaps in the perm, if requried (e.g., perm=3,1,0 -> 2,1,0)
       int currentValue = 0;
@@ -1630,11 +1759,13 @@ void Transpose<floatType>::fuseIndices()
       sizeA_[std::get<0>(tup)] *= sizeA_[std::get<1>(tup)];
       outerSizeA_[std::get<0>(tup)] *= outerSizeA_[std::get<1>(tup)];
       outerSizeA_[std::get<1>(tup)] = -1;
+      offsetA_[std::get<1>(tup)] = -1;
 
       auto pos1 = std::find(perm_.begin(), perm_.end(), std::get<0>(tup)) - perm_.begin();
       auto pos2 = std::find(perm_.begin(), perm_.end(), std::get<1>(tup)) - perm_.begin();
       outerSizeB_[pos1] *= outerSizeB_[pos2];
       outerSizeB_[pos2] = -1;
+      offsetB_[pos2] = -1;
    }
 
    if ( fusedIndices.size() > 0 ) {
@@ -1668,8 +1799,10 @@ void Transpose<floatType>::fuseIndices()
             for(;j < dim_ ; ++j)
                if( outerSizeA_[j] != -1 )
                   break;
-            if( j < dim_ )
+            if( j < dim_ ) {
                std::swap(outerSizeA_[i], outerSizeA_[j]);
+               std::swap(offsetA_[i], offsetA_[j]);
+            }
          }
       for(int i=0;i < dim_ ; ++i)
          if( outerSizeB_[i] == -1 )
@@ -1678,12 +1811,16 @@ void Transpose<floatType>::fuseIndices()
             for(;j < dim_ ; ++j)
                if( outerSizeB_[j] != -1 )
                   break;
-            if( j < dim_ )
+            if( j < dim_ ) {
                std::swap(outerSizeB_[i], outerSizeB_[j]);
+               std::swap(offsetB_[i], offsetB_[j]);
+            }
          }
       dim_ -= fusedIndices.size();
       outerSizeA_.resize(dim_);
       outerSizeB_.resize(dim_);
+      offsetA_.resize(dim_);
+      offsetB_.resize(dim_);
       sizeA_.resize(dim_);
       perm_.resize(dim_);
 
@@ -1693,13 +1830,19 @@ void Transpose<floatType>::fuseIndices()
          printf("%d ",perm_[i]);
       printf("\nsizes_new: ");
       for(int i=0;i < dim_ ; ++i)
-         printf("%d ",sizeA_[i]);
+         printf("%lu ",sizeA_[i]);
       printf("\nouterSizeA_new: ");
       for(int i=0;i < dim_ ; ++i)
-         printf("%d ",outerSizeA_[i]);
+         printf("%lu ",outerSizeA_[i]);
       printf("\nouterSizeB_new: ");
       for(int i=0;i < dim_ ; ++i)
-         printf("%d ",outerSizeB_[i]);
+         printf("%lu ",outerSizeB_[i]);
+      printf("\noffsetA_new: ");
+      for(int i=0;i < dim_ ; ++i)
+         printf("%lu ",offsetA_[i]);
+      printf("\noffsetB_new: ");
+      for(int i=0;i < dim_ ; ++i)
+         printf("%lu ",offsetB_[i]);
       printf("\n");
 #endif
    } 
@@ -1951,11 +2094,17 @@ void Transpose<floatType>::createPlans( std::vector<std::shared_ptr<Plan> > &pla
                   const int commId = (taskIdComm/numThreadsPerComm); //  = 0,0,1,1,2,2
                   taskIdComm = taskIdComm % numThreadsPerComm; // local taskId in next communicator // 0,1,0,1,0,1
 
-                  currentNode->start = std::min( sizeA_[index], commId * workPerThread * currentNode->inc );
-                  currentNode->end = std::min( sizeA_[index], (commId+1) * workPerThread * currentNode->inc );
+                  if (index == 0) currentNode->indexA = true;
+                  if (findPos(index, perm_) == 0) currentNode->indexB = true;
+                  currentNode->start = std::min( sizeA_[index] + offsetB_[findPos(index, perm_)], (commId * workPerThread * currentNode->inc) + offsetB_[findPos(index, perm_)] );
+                  currentNode->end = std::min( sizeA_[index] + offsetB_[findPos(index, perm_)], ((commId+1) * workPerThread * currentNode->inc) + offsetB_[findPos(index, perm_)] );
 
                   currentNode->lda = lda_[index];
                   currentNode->ldb = ldb_[findPos(index, perm_)];
+                  currentNode->offDiffAB = (int)offsetA_[index] - (int)offsetB_[findPos(index, perm_)];
+#ifdef DEBUG
+                  printf("(Task %d, Node %p) Level %d is IndexA %d, IndexB %d. Start: %zu, End: %zu, lda: %zu, ldb: %zu, offDiffAB: %d\n",taskId,currentNode,l,currentNode->indexA,currentNode->indexB,currentNode->start,currentNode->end,currentNode->lda,currentNode->ldb,currentNode->offDiffAB);
+#endif
 
                   if( perm_[0] != 0 || l != dim_-1 ){
                      currentNode->next = new ComputeNode;
@@ -1966,12 +2115,17 @@ void Transpose<floatType>::createPlans( std::vector<std::shared_ptr<Plan> > &pla
                //macro-kernel
                if( perm_[0] != 0 )
                {
+                  if (posStride1A_inB == 0) currentNode->indexB = true;
                   currentNode->start = -1;
                   currentNode->end = -1;
                   currentNode->inc = -1;
                   currentNode->lda = lda_[ posStride1B_inA ];
                   currentNode->ldb = ldb_[ posStride1A_inB ];
+                  currentNode->offDiffAB = (int)offsetA_[ posStride1B_inA ] - (int)offsetB_[ posStride1A_inB ];
                   currentNode->next = nullptr;
+#ifdef DEBUG
+                  printf("    Adjust Node (%p) IndexA: %d, IndexB: %d, Start: %zu, End: %zu, lda: %zu, ldb: %zu, offDiffAB: %d\n",currentNode,currentNode->indexA,currentNode->indexB,currentNode->start,currentNode->end,currentNode->lda,currentNode->ldb,currentNode->offDiffAB);
+#endif
                }
             }
             plans.push_back(plan);
@@ -2078,7 +2232,7 @@ std::shared_ptr<Plan> Transpose<floatType>::selectPlan( const std::vector<std::s
          }
       }
       if( this->infoLevel_ > 0 )
-         printf("We evaluated %d/%d candidates and selected candidate %d.\n", plansEvaluated, plans.size(), bestPlan_id); 
+         printf("We evaluated %d/%zu candidates and selected candidate %d.\n", plansEvaluated, plans.size(), bestPlan_id); 
    }
    return plans[bestPlan_id];
 }
