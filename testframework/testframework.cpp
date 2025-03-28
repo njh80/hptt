@@ -81,7 +81,7 @@ static void getRandomTest(int &dim, uint32_t *perm, uint32_t *size,
       std::string &outerSizeB_str, std::string &offsetB_str, 
       const int total_size, bool subTensors)
 {
-   dim = 8;//(rand() % MAX_DIM) + 1;
+   dim = (rand() % MAX_DIM) + 1;
    uint32_t maxSizeDim = std::max(1.0, std::pow(total_size, 1.0/dim));
    std::vector<int> perm_(dim);
    for(int i=0;i < dim ; ++i){
@@ -115,8 +115,8 @@ static void getRandomTest(int &dim, uint32_t *perm, uint32_t *size,
    // Provide a larger inner stride if the tensor is less than a integer factor of the total size
    int ordinalSizeA = std::accumulate(outerSizeA, outerSizeA+dim, 1, std::multiplies<uint32_t>());
    int ordinalSizeB = std::accumulate(outerSizeB, outerSizeB+dim, 1, std::multiplies<uint32_t>());
-   innerStrideA = (ordinalSizeA < (total_size / 4)) ? 2 : 1;
-   innerStrideB = (ordinalSizeB < (total_size / 4)) ? 2 : 1;
+   innerStrideA = (ordinalSizeA < (total_size / (dim*4))) ? std::max((((double)rand())/RAND_MAX) * dim, 1.) : 1;
+   innerStrideB = (ordinalSizeB < (total_size / (dim*4))) ? std::max((((double)rand())/RAND_MAX) * dim, 1.) : 1;
 
    for(int i=0;i < dim ; ++i){
       perm_str += std::to_string(perm[i]) + " ";
