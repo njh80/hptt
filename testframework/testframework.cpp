@@ -73,6 +73,7 @@ template<typename floatType>
 static void getRandomTest(int &dim, uint32_t *perm, uint32_t *size, 
       uint32_t *outerSizeA, uint32_t *outerSizeB,
       uint32_t *offsetA, uint32_t *offsetB,
+      int &innerStrideA, int &innerStrideB,
       floatType &beta, 
       int &numThreads, 
       std::string &perm_str, std::string &size_str, 
@@ -80,7 +81,7 @@ static void getRandomTest(int &dim, uint32_t *perm, uint32_t *size,
       std::string &outerSizeB_str, std::string &offsetB_str, 
       const int total_size, bool subTensors)
 {
-   dim = (rand() % MAX_DIM) + 1;
+   dim = 8;//(rand() % MAX_DIM) + 1;
    uint32_t maxSizeDim = std::max(1.0, std::pow(total_size, 1.0/dim));
    std::vector<int> perm_(dim);
    for(int i=0;i < dim ; ++i){
@@ -111,6 +112,12 @@ static void getRandomTest(int &dim, uint32_t *perm, uint32_t *size,
    else
       beta = 4.0;
 
+   // Provide a larger inner stride if the tensor is less than a integer factor of the total size
+   int ordinalSizeA = std::accumulate(outerSizeA, outerSizeA+dim, 1, std::multiplies<uint32_t>());
+   int ordinalSizeB = std::accumulate(outerSizeB, outerSizeB+dim, 1, std::multiplies<uint32_t>());
+   innerStrideA = (ordinalSizeA < (total_size / 4)) ? 2 : 1;
+   innerStrideB = (ordinalSizeB < (total_size / 4)) ? 2 : 1;
+
    for(int i=0;i < dim ; ++i){
       perm_str += std::to_string(perm[i]) + " ";
       size_str += std::to_string(size[i]) + " ";
@@ -127,6 +134,10 @@ static void getRandomTest(int &dim, uint32_t *perm, uint32_t *size,
    printf("outerSizeB: %s\n", outerSizeB_str.c_str());
    printf("offsetA: %s\n", offsetA_str.c_str());
    printf("offsetB: %s\n", offsetB_str.c_str());
+   printf("ordinalSizeA: %d\n", ordinalSizeA);
+   printf("ordinalSizeB: %d\n", ordinalSizeB);
+   printf("innerStrideA: %d\n", innerStrideA);
+   printf("innerStrideB: %d\n", innerStrideB);
    printf("numThreads: %d\n",numThreads);
 }
 
@@ -136,7 +147,6 @@ void runTests(bool subTensors = false)
    int numThreads = 1;
    floatType alpha = 2.;
    floatType beta = 4.;
-   //beta = 0; 
 
    srand(time(NULL));
    int dim;
@@ -146,6 +156,8 @@ void runTests(bool subTensors = false)
    uint32_t outerSizeB[MAX_DIM];
    uint32_t offsetA[MAX_DIM];
    uint32_t offsetB[MAX_DIM];
+   int innerStrideA = 2;
+   int innerStrideB = 2;
    size_t total_size = 128*1024*1024;
 
    // Allocating memory for tensors
@@ -169,6 +181,9 @@ void runTests(bool subTensors = false)
       B_ref[i]  = B[i];
       B_hptt[i] = B[i];
    }
+   printf("Total size: %lu\n", total_size);
+   printf("Last element of A: %f\n", A[total_size-1]);
+   printf("Last element of B: %f\n", B[total_size-1]);
 
    for(int j=0; j < NUM_TESTS; ++j)
    {  
@@ -179,7 +194,15 @@ void runTests(bool subTensors = false)
       std::string offsetA_str = "";
       std::string offsetB_str = "";
       std::cout<<"Test "<<j<<std::endl;
-      getRandomTest(dim, perm, size, outerSizeA, outerSizeB, offsetA, offsetB, beta, numThreads, perm_str, size_str, outerSizeA_str, offsetA_str, outerSizeB_str, offsetB_str, total_size, subTensors);
+      getRandomTest(dim, perm, size, outerSizeA, outerSizeB, offsetA, offsetB, innerStrideA, innerStrideB, beta, numThreads, perm_str, size_str, outerSizeA_str, offsetA_str, outerSizeB_str, offsetB_str, total_size, subTensors);
+      //dim = 8;
+      //beta = 0.0;
+      //int presetPerm[8] = {6, 3, 7, 2, 0, 1, 4, 5};
+      //int presetSize[8] = {4, 5, 8, 1, 7, 4, 9, 9};
+      //int presetOuterSizeA[8] = {4, 5, 8, 1, 7, 4, 9, 9};
+      //int presetOuterSizeB[8] = {9, 1, 9, 8, 4, 5, 7, 4};
+      //int presetOffsetA[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+      //int presetOffsetB[8] = {0, 0, 0, 0, 0, 0, 0, 0};
       int perm_[dim];
       int size_[dim];
       int outerSizeA_[dim];
@@ -193,16 +216,21 @@ void runTests(bool subTensors = false)
          outerSizeB_[i] = (int)outerSizeB[i];
          offsetA_[i] = (int)offsetA[i];
          offsetB_[i] = (int)offsetB[i];
+         //perm[i] = (int)presetPerm[i];
+         //size[i] = (int)presetSize[i];
+         //outerSizeA[i] = (int)presetOuterSizeA[i];
+         //outerSizeB[i] = (int)presetOuterSizeB[i];
+         //offsetA[i] = (int)presetOffsetA[i];
+         //offsetB[i] = (int)presetOffsetB[i];
       }
 
       auto plan = hptt::create_plan( perm_, dim, 
-            alpha, A, size_, outerSizeA_, offsetA_,
-            beta, B_hptt, outerSizeB_, offsetB_,
+            alpha, A, size_, outerSizeA_, offsetA_, innerStrideA,
+            beta, B_hptt, outerSizeB_, offsetB_, innerStrideB,
             hptt::ESTIMATE, numThreads);
 
       restore(B, B_ref, total_size);
-      transpose_ref<floatType>(size, perm, dim, A, alpha, outerSizeA_, offsetA_, B_ref, beta, outerSizeB_, offsetB_, false);
-
+      transpose_ref<floatType>(size, perm, dim, A, alpha, outerSizeA_, offsetA_, innerStrideA, B_ref, beta, outerSizeB_, offsetB_, innerStrideB, false);
       restore(B, B_hptt, total_size);
       plan->execute();
 
